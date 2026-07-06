@@ -1,0 +1,39 @@
+# Dioptra task-graph entrypoint for the ATR manifest scan.
+#
+# Wiring follows the real usnistgov/dioptra "extra/entrypoints" example
+# (graph steps reference plugin functions; $step.output feeds downstream
+# inputs; the `artifacts` block turns a step output into a Dioptra artifact).
+#
+# NOTE (PROTOTYPE): not yet executed inside a running Dioptra deployment.
+#
+# Flow:
+#   resolve_step   : resolve local path / S3 URI  -> local_root
+#   scan_step      : run ATR engine over manifests -> hits (atr_hits_table)
+#   summarize_step : reduce hits to scalar metrics  -> metrics (atr_metrics)
+#   The hits table is captured as a Dioptra artifact via write_hits_artifact.
+
+parameters:
+  manifest_location: examples/sample_manifests
+  output_dir: output
+  rules_dir: ""
+  s3_download_dir: ""
+
+graph:
+  resolve_step:
+    resolve_input:
+      manifest_location: $manifest_location
+      s3_download_dir: $s3_download_dir
+
+  scan_step:
+    scan_manifests:
+      local_root: $resolve_step
+      rules_dir: $rules_dir
+
+  artifact_step:
+    write_hits_artifact:
+      hits: $scan_step
+      output_dir: $output_dir
+
+  summarize_step:
+    summarize_hits:
+      hits: $scan_step

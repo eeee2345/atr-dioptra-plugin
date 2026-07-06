@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+venv/
+.atr-venv/
+
+# Scan output
+output/
+/tmp/atr-out/
+atr_hits.json
+atr_hits.csv
+
+# OS
+.DS_Store
