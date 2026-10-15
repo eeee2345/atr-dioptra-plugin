@@ -6,7 +6,10 @@
 # object store. These images take the minio and mc binaries from Chainguard's
 # source builds and put them on debian-slim, which provides the bash, curl and
 # coreutils that the template's healthcheck and init scripts call. Entrypoints
-# match the original images, so the template's commands work unchanged.
+# match the original images, so the template's commands work unchanged. The mc
+# image adds one behaviour: `mc alias set` first waits for the endpoint to be
+# live (mc-wrapper.sh), because the template's init runs it right after
+# starting MinIO without waiting.
 #
 #   docker build --target minio -t minio-shim/minio:latest ci/minio
 #   docker build --target mc    -t minio-shim/mc:latest    ci/minio
@@ -27,5 +30,6 @@ COPY --from=minio-src /usr/bin/minio /usr/bin/minio
 ENTRYPOINT ["minio"]
 
 FROM base AS mc
-COPY --from=mc-src /usr/bin/mc /usr/bin/mc
+COPY --from=mc-src /usr/bin/mc /usr/local/bin/mc-real
+COPY --chmod=0755 mc-wrapper.sh /usr/bin/mc
 ENTRYPOINT ["mc"]

@@ -226,7 +226,11 @@ back clean without an error.
 
 The deployment used stand-ins for the template's two MinIO images
 (`ci/minio/Dockerfile`), because `minio/minio` and `minio/mc` are no longer
-published; every Dioptra image was the official 1.2.1 one.
+published; every Dioptra image was the official 1.2.1 one. The `mc` stand-in
+also waits for MinIO to be live before an `mc alias set`: the template's
+`init-deployment.sh` runs that command right after starting MinIO, which fails
+with "connection refused" when the client wins the race (it did on GitHub's
+runners).
 
 Not exercised yet:
 

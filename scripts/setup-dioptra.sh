@@ -8,8 +8,10 @@
 # references minio/minio and minio/mc, which are no longer published (Docker
 # Hub answers 404, dl.min.io 410). Stand-in images are built from
 # ci/minio/Dockerfile and substituted for those two references only; every
-# Dioptra image and all other services come from the template unchanged. Set
-# USE_MINIO_SHIM=0 to use the template's references as they are.
+# Dioptra image and all other services come from the template unchanged. The
+# mc stand-in also waits for MinIO before the template's first `mc alias set`,
+# which otherwise races MinIO's startup. Set USE_MINIO_SHIM=0 to use the
+# template's references as they are.
 #
 # Usage:
 #   scripts/setup-dioptra.sh <deployments-parent-dir> [data-dir]
