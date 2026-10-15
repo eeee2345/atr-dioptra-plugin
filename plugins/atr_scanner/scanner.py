@@ -21,7 +21,7 @@ Design notes / contract:
   event_types triggered it, so the table has one row per distinct finding.
 
 The engine used here is ATR's Layer-1 regex engine (``pyatr``). It is a
-pattern-matching floor, not a semantic analyzer — see README PROTOTYPE notes.
+pattern-matching floor, not a semantic analyzer — see README Limitations.
 """
 
 from __future__ import annotations
@@ -232,14 +232,24 @@ def build_pyatr_scan_fn(rules_dir: str | Path | None = None):
 
     Imported lazily so unit tests never require pyatr to be installed.
     Returns a callable ``(text, event_type) -> list[ATRMatch]``.
+
+    Raises ``ValueError`` when no rule was loaded: an empty rule set would
+    report every manifest as clean, which must never pass as a result.
     """
     from pyatr import ATREngine, AgentEvent  # noqa: PLC0415 (lazy on purpose)
 
     engine = ATREngine()
     if rules_dir is not None:
-        engine.load_rules_from_directory(str(rules_dir))
+        loaded = engine.load_rules_from_directory(str(rules_dir))
+        source = f"rules_dir {str(rules_dir)!r}"
     else:
-        engine.load_bundled_rules()
+        loaded = engine.load_bundled_rules()
+        source = "the bundled pyatr rules"
+    if not loaded:
+        raise ValueError(
+            f"no ATR rules were loaded from {source}; refusing to scan with an "
+            "empty rule set"
+        )
 
     def _scan(text: str, event_type: str):
         event = AgentEvent(content=text, event_type=event_type)

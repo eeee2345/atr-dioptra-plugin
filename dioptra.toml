@@ -1,15 +1,14 @@
 # Dioptra resource-import manifest for the ATR scanner plugin.
 #
 # Format follows the real usnistgov/dioptra "extra/dioptra.toml" example:
-#   [[plugins]] -> [[plugins.tasks.functions]] -> input_params / output_params
+#   [[plugins]] -> [[plugins.tasks.functions]] / [[plugins.tasks.artifacts]]
 #   [[plugin_param_types]]
 #   [[entrypoints]]
 # Reference: https://github.com/usnistgov/dioptra/tree/main/extra
 #            https://pages.nist.gov/dioptra/reference/resource-import-reference.html
 #
-# NOTE (PROTOTYPE): this file has NOT yet been round-tripped through a live
-# Dioptra import. Field names match the published example, but they are not
-# verified against a running Dioptra instance. See README "PROTOTYPE gaps".
+# Live checks against a Dioptra deployment: README "Validation status" and
+# scripts/e2e-dioptra.sh.
 
 [[plugins]]
 path = "plugins/atr_scanner"
@@ -47,8 +46,17 @@ description = "Scan agent skill / MCP manifests with the ATR (Agent Threat Rules
   name = "summarize_hits"
   input_params = [
     { name = "hits", type = "atr_hits_table", required = true },
+    { name = "local_root", type = "string", required = false },
   ]
   output_params = [ { name = "metrics", type = "atr_metrics" } ]
+
+  [[plugins.tasks.functions]]
+  filename = "tasks.py"
+  name = "log_scan_metrics"
+  input_params = [
+    { name = "metrics", type = "atr_metrics", required = true },
+  ]
+  output_params = []
 
   [[plugins.tasks.functions]]
   filename = "tasks.py"
@@ -59,7 +67,17 @@ description = "Scan agent skill / MCP manifests with the ATR (Agent Threat Rules
     { name = "rules_dir", type = "string", required = false },
     { name = "s3_download_dir", type = "string", required = false },
   ]
-  output_params = [ { name = "report", type = "atr_metrics" } ]
+  # {hits, artifact_path, metrics}: not an atr_metrics value, so not typed as one.
+  output_params = [ { name = "report", type = "any" } ]
+
+[[plugins]]
+path = "plugins/atr_artifacts"
+description = "Artifact task that stores the ATR rule-hits table as a JSON or CSV Dioptra artifact."
+
+  [[plugins.tasks.artifacts]]
+  filename = "tasks.py"
+  name = "AtrHitsTableArtifactTask"
+  output_params = [ { name = "hits", type = "atr_hits_table" } ]
 
 [[plugin_param_types]]
 name = "atr_hits_table"
@@ -67,16 +85,16 @@ description = "A list of ATR rule-hit rows: rule_id, severity, category, file, t
 
 [[plugin_param_types]]
 name = "atr_metrics"
-description = "Summary metrics for an ATR scan: total_hits, per-severity and per-category counts, files_with_findings."
+description = "Summary metrics for an ATR scan: total_hits, files_scanned, files_with_findings, per-severity and per-category counts."
 
 [[entrypoints]]
 path = "entrypoints/atr-scan.yaml"
 name = "ATR Manifest Scan"
-description = "Scan a directory or S3 prefix of agent skill / MCP manifests with the ATR engine and record rule hits as artifacts and metrics."
+description = "Scan a directory or S3 prefix of agent skill / MCP manifests with the ATR engine; record the rule-hits table as artifacts and the counts as job metrics."
 params = [
-  { name = "manifest_location", type = "string", default_value = "examples/sample_manifests" },
-  { name = "output_dir", type = "string", default_value = "output" },
+  { name = "manifest_location", type = "string", default_value = "/dioptra/data/atr-manifests" },
   { name = "rules_dir", type = "string", default_value = "" },
   { name = "s3_download_dir", type = "string", default_value = "" },
 ]
 plugins = [ "atr_scanner" ]
+artifact_plugins = [ "atr_artifacts" ]

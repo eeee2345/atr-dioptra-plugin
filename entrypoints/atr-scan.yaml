@@ -1,22 +1,17 @@
 # Dioptra task-graph entrypoint for the ATR manifest scan.
 #
-# Wiring follows the real usnistgov/dioptra "extra/entrypoints" example
-# (graph steps reference plugin functions; $step.output feeds downstream
-# inputs; the `artifacts` block turns a step output into a Dioptra artifact).
-#
-# NOTE (PROTOTYPE): not yet executed inside a running Dioptra deployment.
+# Wiring follows the usnistgov/dioptra "extra/entrypoints" examples: graph
+# steps call plugin tasks, `$step` (or `$step.output`) feeds downstream inputs,
+# and the `artifacts` block turns a step output into a Dioptra artifact via an
+# artifact task. Entrypoint parameters are declared in dioptra.toml; Dioptra's
+# resource import reads only the `graph` and `artifacts` keys of this file.
 #
 # Flow:
 #   resolve_step   : resolve local path / S3 URI  -> local_root
 #   scan_step      : run ATR engine over manifests -> hits (atr_hits_table)
-#   summarize_step : reduce hits to scalar metrics  -> metrics (atr_metrics)
-#   The hits table is captured as a Dioptra artifact via write_hits_artifact.
-
-parameters:
-  manifest_location: examples/sample_manifests
-  output_dir: output
-  rules_dir: ""
-  s3_download_dir: ""
+#   summarize_step : reduce hits to counts          -> metrics (atr_metrics)
+#   metrics_step   : record the counts as Dioptra job metrics
+#   artifacts      : store the hits table as atr_hits.json and atr_hits.csv
 
 graph:
   resolve_step:
@@ -29,11 +24,25 @@ graph:
       local_root: $resolve_step
       rules_dir: $rules_dir
 
-  artifact_step:
-    write_hits_artifact:
-      hits: $scan_step
-      output_dir: $output_dir
-
   summarize_step:
     summarize_hits:
       hits: $scan_step
+      local_root: $resolve_step
+
+  metrics_step:
+    log_scan_metrics:
+      metrics: $summarize_step
+
+artifacts:
+  atr_hits:
+    contents: $scan_step
+    task:
+      name: AtrHitsTableArtifactTask
+      args:
+        format: json
+  atr_hits_csv:
+    contents: $scan_step
+    task:
+      name: AtrHitsTableArtifactTask
+      args:
+        format: csv

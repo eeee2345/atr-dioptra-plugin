@@ -134,3 +134,56 @@ def test_rule_hit_is_frozen():
     )
     with pytest.raises(Exception):
         hit.rule_id = "Y"  # type: ignore[misc]
+
+
+# ---- build_pyatr_scan_fn guard (fake pyatr, so it runs without the engine) --
+
+class _FakeEngine:
+    def __init__(self, bundled: int = 0, from_dir: int = 0):
+        self._bundled = bundled
+        self._from_dir = from_dir
+        self.loaded_from = []
+
+    def load_bundled_rules(self):
+        self.loaded_from.append("bundled")
+        return self._bundled
+
+    def load_rules_from_directory(self, directory):
+        self.loaded_from.append(directory)
+        return self._from_dir
+
+    def evaluate(self, event):
+        return []
+
+
+def _install_fake_pyatr(monkeypatch, engine):
+    import sys
+    import types
+
+    pyatr = types.ModuleType("pyatr")
+    pyatr.ATREngine = lambda: engine
+    pyatr.AgentEvent = lambda content, event_type: (content, event_type)
+    monkeypatch.setitem(sys.modules, "pyatr", pyatr)
+
+
+@pytest.mark.parametrize(
+    ("engine", "rules_dir"),
+    [(_FakeEngine(bundled=0), None), (_FakeEngine(from_dir=0), "/empty/rules")],
+    ids=["bundled-rules-empty", "rules-dir-empty"],
+)
+def test_empty_rule_set_raises_instead_of_scanning(monkeypatch, engine, rules_dir):
+    from atr_scanner.scanner import build_pyatr_scan_fn
+
+    _install_fake_pyatr(monkeypatch, engine)
+    with pytest.raises(ValueError, match="no ATR rules were loaded"):
+        build_pyatr_scan_fn(rules_dir)
+
+
+def test_loaded_rule_set_returns_a_scan_function(monkeypatch):
+    from atr_scanner.scanner import build_pyatr_scan_fn
+
+    engine = _FakeEngine(from_dir=3)
+    _install_fake_pyatr(monkeypatch, engine)
+    scan = build_pyatr_scan_fn("/custom/rules")
+    assert engine.loaded_from == ["/custom/rules"]
+    assert scan("text", "llm_input") == []
