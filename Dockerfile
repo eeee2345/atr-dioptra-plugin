@@ -1,41 +1,43 @@
 # Custom Dioptra worker image for the ATR scanner plugin.
 #
-# A Dioptra plugin runs inside a "worker" container. To make the ATR runtime
-# (pyatr + its bundled rules) importable by the plugin tasks, we layer those
-# deps on top of the official Dioptra worker base image.
+# A Dioptra plugin runs inside a "worker" container. This image layers the ATR
+# runtime (pyatr + its bundled rules) onto an official Dioptra worker image, so
+# it keeps that worker's entrypoint, healthcheck, unprivileged user and
+# /opt/venv unchanged. Only the runtime dependency is added: the plugin code is
+# NOT installed into the venv, because Dioptra ships the imported plugin to the
+# worker with every job (an installed copy could shadow the imported one).
 #
-# PROTOTYPE / TODO — replace this placeholder base with the REAL Dioptra worker
-# base image tag. As of writing, the exact published tag must be confirmed from
-# the Dioptra release you are targeting, e.g. one of:
-#   FROM ghcr.io/usnistgov/dioptra/tensorflow2-cpu:<version>
-#   FROM ghcr.io/usnistgov/dioptra/pytorch-cpu:<version>
-# (Confirm against https://github.com/usnistgov/dioptra packages before build.)
-# This has NOT been built or run against a live Dioptra worker yet.
-ARG DIOPTRA_WORKER_BASE=python:3.12-slim
+# Built and run against ghcr.io/usnistgov/dioptra/pytorch-cpu:1.2.1 (see
+# README "Validation status"). Any official worker image works as the base;
+# keep its tag equal to your deployment's container_tag:
+#   docker build --build-arg DIOPTRA_WORKER_BASE=ghcr.io/usnistgov/dioptra/tensorflow2-cpu:1.2.1 ...
+ARG DIOPTRA_WORKER_BASE=ghcr.io/usnistgov/dioptra/pytorch-cpu:1.2.1
+# The official worker images build /opt/venv with uv but do not ship it; borrow
+# the same uv release for the install step without copying it into the image.
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.8.4
+
+FROM ${UV_IMAGE} AS uv
+
 FROM ${DIOPTRA_WORKER_BASE}
 
-# ---- ATR runtime dependencies ----------------------------------------------
+# ---- ATR runtime dependency ------------------------------------------------
 # pyatr ships the ATR Layer-1 rules bundled, so no rules volume is required for
-# the default scan. Pin a known-good version for reproducibility.
-ARG PYATR_VERSION=0.2.6
-RUN pip install --no-cache-dir "pyatr==${PYATR_VERSION}"
+# the default scan. Pinned for reproducibility. The base image runs as the
+# dioptra user (uid 39000), which owns /opt/venv.
+ARG PYATR_VERSION=0.3.0
+RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv pip install --python /opt/venv/bin/python --no-cache "pyatr==${PYATR_VERSION}"
 
-# ---- Plugin code -----------------------------------------------------------
-# In a real Dioptra deployment the plugin is imported via `dioptra.toml`
-# resource import rather than baked in, but we install the package here so the
-# worker can `import atr_scanner` directly and so the image is self-testing.
-WORKDIR /opt/atr-dioptra-plugin
-COPY pyproject.toml README.md ./
-COPY plugins ./plugins
-COPY entrypoints ./entrypoints
-COPY dioptra.toml ./dioptra.toml
-COPY examples ./examples
-RUN pip install --no-cache-dir .
+# ---- Build-time smoke test --------------------------------------------------
+# Scan the bundled samples with the plugin code so a broken image fails fast.
+# The copy lives outside the worker's import path and is only used here (and
+# for manual debugging with PYTHONPATH=/opt/atr-dioptra-plugin/plugins).
+COPY plugins /opt/atr-dioptra-plugin/plugins
+COPY examples /opt/atr-dioptra-plugin/examples
+RUN cd /opt/atr-dioptra-plugin \
+    && PYTHONPATH=plugins python -m atr_scanner.cli \
+         --input examples/sample_manifests --output /tmp/atr-smoke \
+    && python -c "import json, sys; rows = json.load(open('/tmp/atr-smoke/atr_hits.json')); files = {r['file'] for r in rows}; sys.exit(0 if rows and not any('benign' in f for f in files) else 'smoke test: unexpected hits table')"
 
-# Smoke-test the CLI at build time so a broken image fails fast.
-RUN atr-dioptra-scan --input examples/sample_manifests --output /tmp/atr-out \
-    && test -f /tmp/atr-out/atr_hits.json
-
-# The Dioptra worker base image already defines the correct ENTRYPOINT/CMD to
-# join the Dioptra job queue; we intentionally do NOT override it here. When
-# using the placeholder base above, invoke the CLI manually instead.
+# ENTRYPOINT, CMD, USER, WORKDIR and HEALTHCHECK script are inherited from the
+# Dioptra worker base image; pass the queue name via docker compose `command:`.
