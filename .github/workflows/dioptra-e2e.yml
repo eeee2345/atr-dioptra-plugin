@@ -1,0 +1,45 @@
+name: dioptra-e2e
+
+# Full round trip against a fresh Dioptra deployment: official cruft template,
+# custom ATR worker, resource import of this commit, one scan job, and checks
+# on the job's status, metrics and artifacts. Heavy (pulls the Dioptra images),
+# so it runs on demand and weekly to catch Dioptra changes early.
+on:
+  workflow_dispatch:
+    inputs:
+      dioptra_ref:
+        description: Dioptra template branch or tag
+        default: main
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      DIOPTRA_REF: ${{ inputs.dioptra_ref || 'main' }}
+      DEPLOYMENT_NAME: atr-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install cruft requests
+      - name: Throwaway API account for this run
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          echo "DIOPTRA_USERNAME=atr-e2e" >> "${GITHUB_ENV}"
+          echo "DIOPTRA_PASSWORD=${password}" >> "${GITHUB_ENV}"
+      - name: Create a Dioptra deployment
+        run: scripts/setup-dioptra.sh "${RUNNER_TEMP}/dioptra" "${RUNNER_TEMP}/dioptra-data"
+      - name: Run the ATR job end to end
+        run: scripts/e2e-dioptra.sh "${RUNNER_TEMP}/dioptra/${DEPLOYMENT_NAME}"
+      - name: Service logs
+        if: failure()
+        working-directory: ${{ runner.temp }}/dioptra/atr-e2e
+        run: docker compose logs --tail 300
