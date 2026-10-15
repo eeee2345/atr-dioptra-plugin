@@ -217,6 +217,10 @@ official cruft template and `init-deployment.sh`, Docker Desktop, linux/arm64,
 | Resource import | Succeeds: the earlier prototype from the GitHub URL, this version as an uploaded archive of the same tree layout |
 | Job on "ATR Manifest Scan" over `examples/sample_manifests` | `finished`; artifacts `atr_hits.json` and `atr_hits_csv.csv` recorded on the job; all seven metrics recorded; hits only for the malicious sample, none for the benign one; artifact rows equal `total_hits` |
 
+The same round trip also passed on GitHub's `ubuntu-latest` runner
+(linux/amd64) through the `dioptra-e2e` workflow, on 2026-10-16: deployment
+from the template, worker build, resource import, one job, 7 of 7 checks.
+
 What the live run caught in the earlier prototype (all fixed here): the tasks
 were not registered with `pyplugs`, so every job failed in its first step; the
 hits table went to the job's temporary directory instead of being stored as
@@ -235,8 +239,7 @@ runners).
 Not exercised yet:
 
 - `s3://` input against a real bucket (unit-tested with a fake client only);
-- the GitHub Actions workflows on GitHub itself, a linux/amd64 worker build,
-  the `tensorflow2-cpu` base, and Dioptra versions other than 1.2.1;
+- the `tensorflow2-cpu` base, and Dioptra versions other than 1.2.1;
 - import and job submission through the GUI (both were done over the REST
   API, as `scripts/dioptra_e2e.py` does).
 
