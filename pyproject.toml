@@ -24,6 +24,8 @@ dev = [
   "tomli>=2.0; python_version < '3.11'",
   "pyyaml>=6.0",
 ]
+# scripts/dioptra_e2e.py (end-to-end run against a live Dioptra deployment)
+e2e = ["requests>=2.25"]
 
 [project.scripts]
 atr-dioptra-scan = "atr_scanner.cli:main"
