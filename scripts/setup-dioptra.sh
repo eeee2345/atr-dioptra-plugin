@@ -41,7 +41,9 @@ if [[ "${USE_MINIO_SHIM}" == "1" ]]; then
   docker build --target mc -t minio-shim/mc:latest "${REPO_ROOT}/ci/minio"
 fi
 
-EXTRA_CONTEXT="$("${PYTHON}" - "${DEPLOYMENT_NAME}" "${DATA_DIR}" "${USE_MINIO_SHIM}" <<'EOF'
+# Kept in a function: bash 3.2 (macOS) misparses a heredoc inside $(...).
+extra_context() {
+  "${PYTHON}" - "$@" <<'EOF'
 import json, sys
 name, data_dir, use_shim = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 context = {
@@ -55,7 +57,7 @@ context = {
     "datasets_directory": data_dir,
 }
 if use_shim:
-    # Merged into the template's private __containers map: only these two
+    # Merged into the private __containers map of the template: only these two
     # image references change.
     context["__containers"] = {
         "minio": {"image": "minio", "namespace": "minio-shim", "tag": "latest", "registry": ""},
@@ -63,7 +65,8 @@ if use_shim:
     }
 print(json.dumps(context))
 EOF
-)"
+}
+EXTRA_CONTEXT="$(extra_context "${DEPLOYMENT_NAME}" "${DATA_DIR}" "${USE_MINIO_SHIM}")"
 
 cd "${PARENT_DIR}"
 "${PYTHON}" -m cruft create "${DIOPTRA_TEMPLATE}" \
