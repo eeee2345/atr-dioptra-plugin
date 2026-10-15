@@ -1,8 +1,10 @@
 # ATR scanner plugin for NIST Dioptra
 
-> **Status: early.** See [Validation status](#validation-status) for what has
-> and has not been exercised against a live Dioptra deployment before relying
-> on it.
+> **Status: early.** Run end to end on a live Dioptra 1.2.1 deployment (custom
+> worker on the official worker image, resource import, a scan job recording
+> artifacts and metrics). See [Validation status](#validation-status) for
+> exactly what was and was not exercised, and [Limitations](#limitations)
+> before relying on the results.
 
 A thin Dioptra plugin that runs the ATR Layer-1 engine (`pyatr`) over a
 directory (or S3 prefix) of agent **skill / MCP manifests** and records a
@@ -153,8 +155,10 @@ and [importing resources](https://pages.nist.gov/dioptra/how-to/import-content/i
   `s3_download_dir`).
 
 `rules_dir` (optional) points at a custom ATR rules directory; left empty, the
-rules bundled with `pyatr` are used. A rule set that loads no rules is an
-error, never a clean scan.
+rules bundled with `pyatr` are used. A rule set that loads no rules, or a
+location without any manifest, is an error, never a clean scan. For `s3://`
+input the standard boto3 configuration applies (`AWS_*` environment variables;
+`AWS_ENDPOINT_URL_S3` for an S3-compatible endpoint such as MinIO).
 
 **Output** — recorded on the Dioptra job:
 
@@ -170,7 +174,7 @@ error, never a clean scan.
   | `title` | human-readable rule title |
   | `confidence` | rule confidence |
   | `event_types` | which replay contexts fired the rule (comma-separated) |
-  | `matched_patterns` | matched pattern excerpts |
+  | `matched_patterns` | the rule's patterns that matched (regexes from the rule, not excerpts of the manifest) |
 
 - **Metrics** `total_hits`, `files_scanned`, `files_with_findings`,
   `critical`, `high`, `medium`, `low`. The per-category breakdown is part of
@@ -194,16 +198,57 @@ patterns the manifest text could trigger.
 | Command | What it checks |
 |---------|----------------|
 | `pytest -q` | Unit tests (fake engine), the `dioptra.toml` ↔ code ↔ entrypoint reconciliation, and the integration smoke with the real `pyatr` |
-| `pip install dioptra-platform==1.2.1` then `pytest -q` | Adds `tests/test_dioptra_compat.py`: the TOML against Dioptra's own import schema, `pyplugs` registration of every task, the artifact task interface |
+| `pip install dioptra-platform==1.2.1` then `pytest -q` | Adds `tests/test_dioptra_compat.py` (the TOML against Dioptra's own import schema, `pyplugs` registration of every task, the artifact task interface) and `tests/test_dioptra_engine.py` (the entrypoint validated and run through Dioptra's task engine on the samples, no deployment needed) |
 | `scripts/setup-dioptra.sh <dir>` then `scripts/e2e-dioptra.sh <dir>/atr-e2e` | Live round trip: fresh deployment from the official template, worker build, resource import of `HEAD`, one job, checks on the job's status, metrics and artifacts |
 
 CI (`.github/workflows/ci.yml`) runs the first two plus the worker image
-build on every push; `.github/workflows/dioptra-e2e.yml` runs the live round
-trip on demand and weekly, to catch Dioptra changes early.
+build on pull requests and pushes to `main`; `.github/workflows/dioptra-e2e.yml`
+runs the live round trip on demand and weekly, to catch Dioptra changes early.
 
 ## Validation status
 
-Pending: the live round trip against Dioptra 1.2.1 (`scripts/e2e-dioptra.sh`).
+Checked on 2026-10-16 against **Dioptra 1.2.1**: a deployment created with the
+official cruft template and `init-deployment.sh`, Docker Desktop, linux/arm64,
+`pyatr` 0.3.0.
+
+| Step | Result |
+|------|--------|
+| Worker image `FROM ghcr.io/usnistgov/dioptra/pytorch-cpu:1.2.1` | Builds; starts with the base image's entrypoint and joins the `atr-scanner` queue (`dioptra-worker-v1`) |
+| Resource import | Succeeds: the earlier prototype from the GitHub URL, this version as an uploaded archive of the same tree layout |
+| Job on "ATR Manifest Scan" over `examples/sample_manifests` | `finished`; artifacts `atr_hits.json` and `atr_hits_csv.csv` recorded on the job; all seven metrics recorded; hits only for the malicious sample, none for the benign one; artifact rows equal `total_hits` |
+
+What the live run caught in the earlier prototype (all fixed here): the tasks
+were not registered with `pyplugs`, so every job failed in its first step; the
+hits table went to the job's temporary directory instead of being stored as
+artifacts; the metrics were returned but never recorded; and the `""` default
+of an unset `rules_dir` made the engine load no rules, so every manifest came
+back clean without an error.
+
+The deployment used stand-ins for the template's two MinIO images
+(`ci/minio/Dockerfile`), because `minio/minio` and `minio/mc` are no longer
+published; every Dioptra image was the official 1.2.1 one.
+
+Not exercised yet:
+
+- `s3://` input against a real bucket (unit-tested with a fake client only);
+- the GitHub Actions workflows on GitHub itself, a linux/amd64 worker build,
+  the `tensorflow2-cpu` base, and Dioptra versions other than 1.2.1;
+- import and job submission through the GUI (both were done over the REST
+  API, as `scripts/dioptra_e2e.py` does).
+
+## Limitations
+
+- **The engine is `pyatr`, ATR's Layer-1 regex engine.** It is a
+  pattern-matching floor, not a semantic analyzer. It will miss obfuscated or
+  novel attacks and can flag benign text that resembles an attack pattern.
+  Treat hits as signals to triage, not verdicts. (Found while building the
+  benign sample: some rules lack word boundaries, so the word "Skill" matched a
+  `kill|shutdown|...` pattern, and a `## Instructions` markdown heading matched
+  a system-prompt-override rule.) Layer-1 precision depends on the rule lane;
+  do not read a single headline number into these results.
+- Hits are rule matches on static text replayed under several event contexts
+  (see above), not observed agent behaviour.
+- Files are read whole; there is no size cap for very large manifests.
 
 ## License
 
