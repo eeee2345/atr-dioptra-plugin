@@ -1,14 +1,12 @@
 # ATR scanner plugin for NIST Dioptra
 
-> **Status: PROTOTYPE.** This is an early, self-managed plugin that wraps the
-> ATR (Agent Threat Rules) engine as a Dioptra task. The scanning core and the
-> local CLI are real and tested; the Dioptra packaging has **not yet been
-> round-tripped through a live Dioptra deployment**. See
-> [PROTOTYPE gaps](#prototype-gaps) before relying on it.
+> **Status: early.** See [Validation status](#validation-status) for what has
+> and has not been exercised against a live Dioptra deployment before relying
+> on it.
 
 A thin Dioptra plugin that runs the ATR Layer-1 engine (`pyatr`) over a
-directory (or S3 prefix) of agent **skill / MCP manifests** and emits a
-**rule-hits table** as Dioptra artifacts plus summary metrics.
+directory (or S3 prefix) of agent **skill / MCP manifests** and records a
+**rule-hits table** as Dioptra artifacts plus summary metrics on the job.
 
 This plugin lives in its own repository (not a Dioptra fork), per the guidance
 from Dioptra maintainer `jkglasbrenner` on
@@ -27,8 +25,8 @@ manifests dir / S3 prefix
         ▼
   scan_manifests     → run ATR engine across event contexts, dedup per rule/file
         │
-        ├─► write_hits_artifact  → atr_hits.json + atr_hits.csv  (Dioptra artifact)
-        └─► summarize_hits        → metrics (total / per-severity / per-category)
+        ├─► AtrHitsTableArtifactTask → atr_hits.json + atr_hits_csv.csv (job artifacts)
+        └─► summarize_hits → log_scan_metrics → job metrics (totals, per severity)
 ```
 
 ## Layout
@@ -37,12 +35,14 @@ manifests dir / S3 prefix
 |------|---------|
 | `dioptra.toml` | Dioptra resource-import manifest (plugins / param types / entrypoints) |
 | `plugins/atr_scanner/scanner.py` | Pure scan core — **no Dioptra dependency**, fully unit-tested |
-| `plugins/atr_scanner/tasks.py` | Dioptra task entrypoints declared in `dioptra.toml` |
+| `plugins/atr_scanner/tasks.py` | Dioptra function tasks declared in `dioptra.toml` |
 | `plugins/atr_scanner/cli.py` | Standalone CLI (`atr-dioptra-scan`) |
-| `entrypoints/atr-scan.yaml` | Task-graph wiring the tasks together |
-| `Dockerfile` | Custom Dioptra worker image (layers ATR deps on the worker base) |
+| `plugins/atr_artifacts/tasks.py` | Dioptra artifact task that stores the hits table (JSON / CSV) |
+| `entrypoints/atr-scan.yaml` | Task graph + artifact outputs of the "ATR Manifest Scan" entrypoint |
+| `Dockerfile` | Custom Dioptra worker image (adds `pyatr` to an official worker image) |
 | `examples/sample_manifests/` | 1 benign + 1 malicious sample |
-| `tests/` | Unit (fake engine, no deps) + integration smoke (real `pyatr`) |
+| `scripts/` | Live end-to-end run against a Dioptra deployment (also used by CI) |
+| `tests/` | Unit (fake engine), reconciliation, Dioptra compatibility, integration (real `pyatr`) |
 
 ## Install & run locally
 
@@ -62,52 +62,122 @@ that exits non-zero when a hit at or above that severity is found.
 
 ## Install into Dioptra
 
-1. **Build the custom worker image.** The plugin needs the ATR runtime
-   (`pyatr`) importable inside the worker. Edit `Dockerfile` and replace the
-   placeholder `DIOPTRA_WORKER_BASE` with the real Dioptra worker base image
-   tag for your deployment, then:
+These steps follow the Dioptra guides for
+[custom workers](https://pages.nist.gov/dioptra/how-to/setup-dioptra/configure-setup/creating-custom-workers.html),
+[integrating custom containers](https://pages.nist.gov/dioptra/how-to/setup-dioptra/configure-setup/integrating-custom-containers.html)
+and [importing resources](https://pages.nist.gov/dioptra/how-to/import-content/import-resources.html).
+`scripts/e2e-dioptra.sh` performs all of them against a deployment.
+
+1. **Build the worker image** on the official worker image whose tag matches
+   your deployment's `container_tag`. Only `pyatr` is added; the entrypoint,
+   healthcheck and user of the official image are kept. The plugin code itself
+   is not baked in: Dioptra ships the imported plugin to the worker with every
+   job.
 
    ```bash
    docker build \
-     --build-arg DIOPTRA_WORKER_BASE=ghcr.io/usnistgov/dioptra/<worker>:<tag> \
-     -t atr-dioptra-worker:0.1.0 .
+     --build-arg DIOPTRA_WORKER_BASE=ghcr.io/usnistgov/dioptra/pytorch-cpu:1.2.1 \
+     -t atr-dioptra-worker:1.2.1 .
    ```
 
-   Register that image as the worker for the ATR jobs.
+2. **Add the worker to the deployment** in `docker-compose.override.yml`
+   (replace `<deployment>` with the deployment's slug and `<host-data-path>`
+   with the host directory that holds the manifests), then `docker compose up -d`:
 
-2. **Import the resources.** Point Dioptra's resource import at `dioptra.toml`.
-   It registers:
-   - the `atr_scanner` plugin and its 5 tasks,
-   - the `atr_hits_table` and `atr_metrics` custom parameter types,
-   - the `ATR Manifest Scan` entrypoint (`entrypoints/atr-scan.yaml`).
+   ```yaml
+   services:
+     <deployment>-atr-worker:
+       image: atr-dioptra-worker:1.2.1
+       restart: always
+       hostname: <deployment>-atr-worker
+       healthcheck:
+         test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+         interval: 30s
+         timeout: 60s
+         retries: 5
+         start_period: 80s
+       environment:
+         AWS_ACCESS_KEY_ID: ${WORKER_AWS_ACCESS_KEY_ID}
+         AWS_SECRET_ACCESS_KEY: ${WORKER_AWS_SECRET_ACCESS_KEY}
+         DIOPTRA_WORKER_USERNAME: ${DIOPTRA_WORKER_USERNAME}
+         DIOPTRA_WORKER_PASSWORD: ${DIOPTRA_WORKER_PASSWORD}
+       command:
+         - --wait-for
+         - <deployment>-redis:6379
+         - --wait-for
+         - <deployment>-minio:9001
+         - --wait-for
+         - <deployment>-db:5432
+         - --wait-for
+         - <deployment>-mlflow-tracking:5000
+         - --wait-for
+         - <deployment>-restapi:5000
+         - atr-scanner            # the queue this worker serves
+       env_file:
+         - ./envs/ca-certificates.env
+         - ./envs/<deployment>-worker.env
+         - ./envs/<deployment>-worker-cpu.env
+       networks:
+         - dioptra
+       volumes:
+         - "worker-ca-certificates:/usr/local/share/ca-certificates:rw"
+         - "worker-etc-ssl:/etc/ssl:rw"
+         - "<host-data-path>:/dioptra/data:ro"
+   ```
 
-3. **Run the entrypoint**, passing `manifest_location` (a path reachable by the
-   worker, or an `s3://` URI) and `output_dir`.
+3. **Import the resources** from `https://github.com/eeee2345/atr-dioptra-plugin`
+   (config path `dioptra.toml`), in the GUI or with the Python client:
+
+   ```python
+   client.workflows.import_resources(
+       group_id=1, source="https://github.com/eeee2345/atr-dioptra-plugin"
+   )
+   ```
+
+   This registers the `atr_scanner` plugin (function tasks), the
+   `atr_artifacts` plugin (the hits-table artifact task), the `atr_hits_table`
+   and `atr_metrics` parameter types, and the `ATR Manifest Scan` entrypoint.
+
+4. **Create a queue named `atr-scanner`**, attach it to the entrypoint, and run
+   a job with `manifest_location` set to a path under `/dioptra/data` (or an
+   `s3://` URI plus `s3_download_dir`).
 
 ## Input / output contract
 
-**Input** — one of:
-- a local directory of manifests (scanned recursively; files with suffixes
-  `.md .txt .json .yaml .yml .toml`),
-- a single local file, or
-- an `s3://bucket/prefix` URI (requires the `[s3]` extra / `boto3` in the
-  worker, plus a `s3_download_dir`).
+**Input** — the entrypoint parameter `manifest_location`, one of:
+- a directory of manifests reachable by the worker (scanned recursively; files
+  with suffixes `.md .txt .json .yaml .yml .toml`), typically under the
+  deployment's data mount `/dioptra/data`,
+- a single file, or
+- an `s3://bucket/prefix` URI (requires `boto3` in the worker and a
+  `s3_download_dir`).
 
-**Output** — a hits table, one row per **(rule_id, file)**, with columns:
+`rules_dir` (optional) points at a custom ATR rules directory; left empty, the
+rules bundled with `pyatr` are used. A rule set that loads no rules is an
+error, never a clean scan.
 
-| column | meaning |
-|--------|---------|
-| `rule_id` | ATR rule id, e.g. `ATR-2026-00113` |
-| `severity` | `critical` / `high` / `medium` / `low` |
-| `category` | ATR category (read from the match's `tags['category']`) |
-| `file` | manifest file, relative to the scanned root |
-| `title` | human-readable rule title |
-| `confidence` | rule confidence |
-| `event_types` | which replay contexts fired the rule (comma-separated) |
-| `matched_patterns` | matched pattern excerpts |
+**Output** — recorded on the Dioptra job:
 
-Emitted as `atr_hits.json` and `atr_hits.csv`. Metrics: `total_hits`,
-`files_with_findings`, per-severity counts, and `category_breakdown`.
+- **Artifacts** `atr_hits` (`atr_hits.json`) and `atr_hits_csv`
+  (`atr_hits_csv.csv`): the hits table, one row per **(rule_id, file)**:
+
+  | column | meaning |
+  |--------|---------|
+  | `rule_id` | ATR rule id, e.g. `ATR-2026-00113` |
+  | `severity` | `critical` / `high` / `medium` / `low` |
+  | `category` | ATR category (read from the match's `tags['category']`) |
+  | `file` | manifest file, relative to the scanned root |
+  | `title` | human-readable rule title |
+  | `confidence` | rule confidence |
+  | `event_types` | which replay contexts fired the rule (comma-separated) |
+  | `matched_patterns` | matched pattern excerpts |
+
+- **Metrics** `total_hits`, `files_scanned`, `files_with_findings`,
+  `critical`, `high`, `medium`, `low`. The per-category breakdown is part of
+  the `summarize_hits` output (and derivable from the artifact).
+
+The CLI writes the same table as `atr_hits.json` / `atr_hits.csv` and prints
+the metrics.
 
 ### Why replay across event types
 
@@ -119,33 +189,21 @@ each manifest under several contexts (`llm_input`, `tool_call`,
 contexts triggered each rule. This surfaces the full set of rules whose
 patterns the manifest text could trigger.
 
-## PROTOTYPE gaps
+## Testing
 
-Honest limitations — do **not** present this as production-verified:
+| Command | What it checks |
+|---------|----------------|
+| `pytest -q` | Unit tests (fake engine), the `dioptra.toml` ↔ code ↔ entrypoint reconciliation, and the integration smoke with the real `pyatr` |
+| `pip install dioptra-platform==1.2.1` then `pytest -q` | Adds `tests/test_dioptra_compat.py`: the TOML against Dioptra's own import schema, `pyplugs` registration of every task, the artifact task interface |
+| `scripts/setup-dioptra.sh <dir>` then `scripts/e2e-dioptra.sh <dir>/atr-e2e` | Live round trip: fresh deployment from the official template, worker build, resource import of `HEAD`, one job, checks on the job's status, metrics and artifacts |
 
-- **The custom worker container has not been built or run against a live
-  Dioptra worker.** The `Dockerfile` uses a placeholder base image
-  (`python:3.12-slim`) that must be swapped for the real Dioptra worker base;
-  the worker-queue integration is untested.
-- **`dioptra.toml` has not been round-tripped through a live Dioptra resource
-  import.** Field names/nesting match the published
-  `usnistgov/dioptra/extra/dioptra.toml` example and the resource-import
-  reference, but no running Dioptra instance has validated this specific file.
-  An always-on test (`tests/test_dioptra_toml.py`) reconciles the TOML against
-  the code, but that is not the same as a live import.
-- **`entrypoints/atr-scan.yaml` graph wiring is modeled on the example
-  entrypoints**, not verified by execution inside Dioptra.
-- **The ATR engine here is `pyatr` — a Layer-1 *regex* engine.** It is a
-  pattern-matching floor, not a semantic analyzer. It will miss obfuscated or
-  novel attacks and can false-positive on benign text that resembles an attack
-  pattern. Treat hits as signals to triage, not verdicts. (Concrete example
-  found while building the benign sample: some rules lack word boundaries, so
-  the innocuous word "Skill" matched a `kill|shutdown|...` pattern, and a `##
-  Instructions` markdown heading matched a system-prompt-override rule. Layer-1
-  precision is lane-dependent — see the ATR precision notes, not a single
-  headline number.)
-- **S3 input is implemented but untested against real S3** (boto3 path is
-  import-lazy and only exercised on `s3://` inputs).
+CI (`.github/workflows/ci.yml`) runs the first two plus the worker image
+build on every push; `.github/workflows/dioptra-e2e.yml` runs the live round
+trip on demand and weekly, to catch Dioptra changes early.
+
+## Validation status
+
+Pending: the live round trip against Dioptra 1.2.1 (`scripts/e2e-dioptra.sh`).
 
 ## License
 
