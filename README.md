@@ -217,7 +217,7 @@ official cruft template and `init-deployment.sh`, Docker Desktop, linux/arm64,
 | Step | Result |
 |------|--------|
 | Worker image `FROM ghcr.io/usnistgov/dioptra/pytorch-cpu:1.2.1` | Builds; starts with the base image's entrypoint and joins the `atr-scanner` queue (`dioptra-worker-v1`) |
-| Resource import | Succeeds: the earlier prototype from the GitHub URL, this version as an uploaded archive of the same tree layout |
+| Resource import | Succeeds from the GitHub URL for both the earlier prototype and this version (re-checked on 2026-11-02, followed by a finished job), and as an uploaded archive of the same tree, which is how the e2e workflow imports it |
 | Job on "ATR Manifest Scan" over `examples/sample_manifests` | `finished`; artifacts `atr_hits.json` and `atr_hits_csv.csv` recorded on the job; all seven metrics recorded; hits only for the malicious sample, none for the benign one; artifact rows equal `total_hits` |
 
 The same round trip also passed on GitHub's `ubuntu-latest` runner
