@@ -147,6 +147,32 @@ def _login(api: DioptraApi, username: str, password: str, register: bool, email:
     api.post("/auth/login", json=credentials)
 
 
+def _ensure_worker_account(base_url: str) -> str | None:
+    """Make sure the account the workers log in with exists.
+
+    The template's init-worker-account.sh in Dioptra 1.2.3 still sends the
+    email field that the 1.2.3 API rejects, so on a fresh 1.2.3 deployment the
+    worker account is never created, every worker login fails with 401 and
+    jobs stay queued. Returns "existed", "created", or None when the worker
+    credentials (DIOPTRA_WORKER_USERNAME / DIOPTRA_WORKER_PASSWORD) are not set.
+    """
+    username = os.environ.get("DIOPTRA_WORKER_USERNAME")
+    password = os.environ.get("DIOPTRA_WORKER_PASSWORD")
+    if not username or not password:
+        return None
+    worker = DioptraApi(base_url)
+    credentials = {"username": username, "password": password}
+    try:
+        worker.post("/auth/login", json=credentials)
+        return "existed"
+    except E2EError as exc:
+        if exc.status_code != 401:
+            raise
+    _register(worker, username, password, "dioptra@example.com")
+    worker.post("/auth/login", json=credentials)
+    return "created"
+
+
 def _import_resources(api: DioptraApi, args: argparse.Namespace, group: int) -> dict[str, Any]:
     data = {
         "group": str(group),
@@ -285,6 +311,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     api = DioptraApi(args.url)
     _login(api, username, password, args.register, args.email)
+    worker_account = _ensure_worker_account(args.url)
     group = args.group or api.list_all("/groups/")[0]["id"]
     imported = _import_resources(api, args, group)
     entrypoint_id = imported["resources"]["entrypoints"][ENTRYPOINT_NAME]
@@ -294,6 +321,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     results = _collect_results(api, job_id)
     return {
         "dioptra_url": args.url,
+        "worker_account": worker_account,
         "import": imported,
         "queue_id": queue_id,
         "experiment_id": experiment_id,

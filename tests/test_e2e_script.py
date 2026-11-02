@@ -145,3 +145,65 @@ def test_register_does_not_retry_other_failures(status, body):
     with pytest.raises(e2e.E2EError):
         e2e._register(Api(), "atr-e2e", "p" * 24, "atr-e2e@example.com")
     assert len(calls) == 1
+
+
+def _fake_worker_api(login_results):
+    """A DioptraApi stand-in whose logins answer in the given order."""
+    calls = []
+    results = list(login_results)
+
+    class FakeApi:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        def post(self, path, json=None, **kwargs):
+            calls.append((path, json))
+            if path == "/auth/login":
+                status = results.pop(0)
+                if status != 200:
+                    raise e2e.E2EError(f"POST /auth/login -> HTTP {status}", status_code=status)
+            return {}
+
+    return FakeApi, calls
+
+
+def test_worker_account_is_left_alone_without_credentials(monkeypatch):
+    monkeypatch.delenv("DIOPTRA_WORKER_USERNAME", raising=False)
+    monkeypatch.delenv("DIOPTRA_WORKER_PASSWORD", raising=False)
+    fake, calls = _fake_worker_api([])
+    monkeypatch.setattr(e2e, "DioptraApi", fake)
+    assert e2e._ensure_worker_account("http://localhost") is None
+    assert calls == []
+
+
+def test_existing_worker_account_is_only_checked(monkeypatch):
+    monkeypatch.setenv("DIOPTRA_WORKER_USERNAME", "dioptra-worker")
+    monkeypatch.setenv("DIOPTRA_WORKER_PASSWORD", "w" * 24)
+    fake, calls = _fake_worker_api([200])
+    monkeypatch.setattr(e2e, "DioptraApi", fake)
+    assert e2e._ensure_worker_account("http://localhost") == "existed"
+    assert [path for path, _ in calls] == ["/auth/login"]
+
+
+def test_missing_worker_account_is_created_without_an_email(monkeypatch):
+    # Dioptra 1.2.3: the template's init could not create the account.
+    monkeypatch.setenv("DIOPTRA_WORKER_USERNAME", "dioptra-worker")
+    monkeypatch.setenv("DIOPTRA_WORKER_PASSWORD", "w" * 24)
+    fake, calls = _fake_worker_api([401, 200])
+    monkeypatch.setattr(e2e, "DioptraApi", fake)
+
+    assert e2e._ensure_worker_account("http://localhost") == "created"
+
+    assert [path for path, _ in calls] == ["/auth/login", "/users/", "/auth/login"]
+    registration = calls[1][1]
+    assert registration["username"] == "dioptra-worker"
+    assert "email" not in registration
+
+
+def test_worker_login_errors_other_than_401_are_raised(monkeypatch):
+    monkeypatch.setenv("DIOPTRA_WORKER_USERNAME", "dioptra-worker")
+    monkeypatch.setenv("DIOPTRA_WORKER_PASSWORD", "w" * 24)
+    fake, _ = _fake_worker_api([503])
+    monkeypatch.setattr(e2e, "DioptraApi", fake)
+    with pytest.raises(e2e.E2EError):
+        e2e._ensure_worker_account("http://localhost")

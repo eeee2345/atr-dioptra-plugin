@@ -138,7 +138,15 @@ mkdir -p "$(dirname "${ARCHIVE}")"
 echo "== archiving HEAD ($(git -C "${REPO_ROOT}" rev-parse --short HEAD)) for upload"
 git -C "${REPO_ROOT}" archive --format=tar.gz -o "${ARCHIVE}" HEAD
 
+# The workers' credentials go to the job runner only (they are not exported
+# or printed): Dioptra 1.2.3's template init does not create the worker
+# account (its init-worker-account.sh sends an email field the 1.2.3 API
+# rejects), so dioptra_e2e.py creates it when the workers cannot log in.
+env_value() { grep -E "^$1=" "${DEPLOY_DIR}/.env" | head -1 | cut -d= -f2-; }
+
 echo "== running the end-to-end job"
+DIOPTRA_WORKER_USERNAME="$(env_value DIOPTRA_WORKER_USERNAME)" \
+DIOPTRA_WORKER_PASSWORD="$(env_value DIOPTRA_WORKER_PASSWORD)" \
 "${PYTHON}" "${REPO_ROOT}/scripts/dioptra_e2e.py" \
   --archive "${ARCHIVE}" \
   --queue "${ATR_QUEUE}" \
