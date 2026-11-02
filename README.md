@@ -220,6 +220,13 @@ official cruft template and `init-deployment.sh`, Docker Desktop, linux/arm64,
 The same round trip also passed on GitHub's `ubuntu-latest` runner
 (linux/amd64) through the `dioptra-e2e` workflow, on 2026-10-16: deployment
 from the template, worker build, resource import, one job, 7 of 7 checks.
+That workflow builds from the template's `main` branch, so it follows Dioptra
+releases: it has since passed on 1.2.2 and 1.2.3. 1.2.3 removed the email
+field from user registration, which needed two changes in the e2e scripts and
+none in the plugin: the test account is registered without an email, and the
+workers' account is created when missing, because the 1.2.3 template's
+`init-worker-account.sh` still sends an email and is rejected, which leaves
+every worker unable to log in.
 
 What the live run caught in the earlier prototype (all fixed here): the tasks
 were not registered with `pyplugs`, so every job failed in its first step; the
@@ -239,7 +246,7 @@ runners).
 Not exercised yet:
 
 - `s3://` input against a real bucket (unit-tested with a fake client only);
-- the `tensorflow2-cpu` base, and Dioptra versions other than 1.2.1;
+- the `tensorflow2-cpu` base, and Dioptra releases older than 1.2.1;
 - import and job submission through the GUI (both were done over the REST
   API, as `scripts/dioptra_e2e.py` does).
 
