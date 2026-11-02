@@ -1,5 +1,8 @@
 # ATR scanner plugin for NIST Dioptra
 
+This is a third-party plugin. It is not part of Dioptra, and it is not
+endorsed by NIST or the Dioptra project.
+
 > **Status: early.** Run end to end on a live Dioptra 1.2.1 deployment (custom
 > worker on the official worker image, resource import, a scan job recording
 > artifacts and metrics). See [Validation status](#validation-status) for
