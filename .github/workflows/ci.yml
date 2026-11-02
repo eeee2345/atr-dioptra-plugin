@@ -23,18 +23,22 @@ jobs:
       - run: pip install -e ".[dev,e2e]"
       - run: pytest -q
 
-  # Same suite with the pinned Dioptra release installed: adds the checks in
+  # Same suite with a Dioptra release installed: adds the checks in
   # tests/test_dioptra_compat.py (import schema, pyplugs registration,
-  # artifact interface) that skip without Dioptra.
+  # artifact interface) that skip without Dioptra. 1.2.1 is the release
+  # validated by hand; the newer entry tracks the latest release.
   dioptra-compat:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      matrix:
+        dioptra-version: ["1.2.1", "1.2.3"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,e2e]" "dioptra-platform==1.2.1" jsonschema
+      - run: pip install -e ".[dev,e2e]" "dioptra-platform==${{ matrix.dioptra-version }}" jsonschema
       # Includes tests/test_dioptra_engine.py: the entrypoint run through
       # Dioptra's own validation, artifact discovery and run_experiment.
       - run: pytest -q -rs

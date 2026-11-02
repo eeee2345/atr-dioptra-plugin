@@ -113,6 +113,22 @@ class DioptraApi:
                 return items
 
 
+def _register(api: DioptraApi, username: str, password: str, email: str) -> None:
+    """Create the account, with or without an email address.
+
+    Dioptra 1.2.3 removed the email field (sending it is a 400 "Unknown
+    field"), while 1.2.2 and earlier require it. Try the current form first
+    and add the email only when the server asks for it.
+    """
+    account = {"username": username, "password": password, "confirmPassword": password}
+    try:
+        api.post("/users/", json=account)
+    except E2EError as exc:
+        if exc.status_code != 400 or "email" not in str(exc):
+            raise
+        api.post("/users/", json={**account, "email": email})
+
+
 def _login(api: DioptraApi, username: str, password: str, register: bool, email: str) -> None:
     credentials = {"username": username, "password": password}
     try:
@@ -123,10 +139,7 @@ def _login(api: DioptraApi, username: str, password: str, register: bool, email:
         if not register or login_error.status_code != 401:
             raise
         try:
-            api.post(
-                "/users/",
-                json={**credentials, "email": email, "confirmPassword": password},
-            )
+            _register(api, username, password, email)
         except E2EError as register_error:
             raise E2EError(
                 f"login failed ({login_error}) and registration failed ({register_error})"

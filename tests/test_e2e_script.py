@@ -85,3 +85,63 @@ def test_missing_credentials_are_a_run_error(monkeypatch, capsys):
     monkeypatch.delenv("DIOPTRA_PASSWORD", raising=False)
     assert e2e.main(["--archive", "x.tar.gz"]) == e2e.EXIT_RUN_ERROR
     assert "DIOPTRA_USERNAME" in capsys.readouterr().out
+
+
+class _FakeUsersApi:
+    """Answers POST /users/ the way a given Dioptra release does."""
+
+    def __init__(self, email_field: str) -> None:
+        # "removed": 1.2.3 and later; "required": 1.2.2 and earlier.
+        self.payloads: list[dict] = []
+        self._email_field = email_field
+
+    def post(self, path, json=None, **kwargs):
+        assert path == "/users/"
+        self.payloads.append(json)
+        has_email = "email" in json
+        if self._email_field == "removed" and has_email:
+            raise e2e.E2EError(
+                'POST /users/ -> HTTP 400: {"errors": {"email": ["Unknown field."]}}',
+                status_code=400,
+            )
+        if self._email_field == "required" and not has_email:
+            raise e2e.E2EError(
+                'POST /users/ -> HTTP 400: {"errors": {"email": '
+                '["Missing data for required field."]}}',
+                status_code=400,
+            )
+        return {"id": 1}
+
+
+def test_register_sends_no_email_to_current_dioptra():
+    api = _FakeUsersApi("removed")
+    e2e._register(api, "atr-e2e", "p" * 24, "atr-e2e@example.com")
+    assert len(api.payloads) == 1
+    assert "email" not in api.payloads[0]
+
+
+def test_register_adds_the_email_when_an_older_dioptra_requires_it():
+    api = _FakeUsersApi("required")
+    e2e._register(api, "atr-e2e", "p" * 24, "atr-e2e@example.com")
+    assert ["email" in payload for payload in api.payloads] == [False, True]
+    assert api.payloads[1]["email"] == "atr-e2e@example.com"
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (400, '{"errors": {"password": ["Too short."]}}'),
+        (409, '{"error": "EntityExistsError"}'),
+    ],
+)
+def test_register_does_not_retry_other_failures(status, body):
+    calls = []
+
+    class Api:
+        def post(self, path, json=None, **kwargs):
+            calls.append(json)
+            raise e2e.E2EError(f"POST /users/ -> HTTP {status}: {body}", status_code=status)
+
+    with pytest.raises(e2e.E2EError):
+        e2e._register(Api(), "atr-e2e", "p" * 24, "atr-e2e@example.com")
+    assert len(calls) == 1
